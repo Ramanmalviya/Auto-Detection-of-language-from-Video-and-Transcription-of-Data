@@ -1,0 +1,13 @@
+Requirements 
+````````````
+pip install torch
+pip install torchaudio
+pip install transformers
+pip install 'transformers[torch]'
+pip install whisperx
+pip install banglaspeech2text
+pip install nltk
+pip install setuptools
+pip install moviepy
+pip install onnx
+pip install onnxruntime
