@@ -1,154 +1,144 @@
-import whisperx
-import ffmpeg
 import os
-import torch
-import torchaudio
 import time
+import torch
+import ffmpeg
+import whisperx
+import torchaudio
 from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.allow_tf32 = True
+# Use GPU if available, otherwise CPU
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# ---------- Step 1: Extract Audio ----------
-# def extract_audio(video_path, output_audio_path):
-#     ffmpeg.input(video_path).output(output_audio_path, ac=1, ar='16000').run(overwrite_output=True)
-#     return output_audio_path
-
-# ---------- Step 1: Extract Audio ----------
-def extract_audio(video_path, output_audio_path):
+# -------------------- Step 1: Extract audio from video --------------------
+def extract_audio(video_path, audio_path):
+    """
+    Take a video file and save its audio as a .wav file (mono, 16kHz).
+    """
     try:
-        # Set quiet=False to see ffmpeg output and capture_stderr=True
-        out, err = ffmpeg.input(video_path).output(output_audio_path, ac=1, ar='16000').run(capture_stderr=True, overwrite_output=True, quiet=False)
-        return output_audio_path
-    except ffmpeg.Error as e:
-        # Check if stdout is not None before decoding
-        if e.stdout:
-            print('ffmpeg stdout:', e.stdout.decode('utf8'))
-        else:
-            print('ffmpeg stdout: (No output)')
-        # Check if stderr is not None before decoding
-        if e.stderr:
-            print('ffmpeg stderr:', e.stderr.decode('utf8'))
-        else:
-            print('ffmpeg stderr: (No output)')
-        raise # Re-raise the exception after printing the details
+        ffmpeg.input(video_path).output(audio_path, ac=1, ar="16000").run(
+            overwrite_output=True, quiet=True
+        )
+        print(f"✅ Audio saved at {audio_path}")
+        return audio_path
+    except Exception as e:
+        print("❌ Failed to extract audio:", e)
+        return None
 
 
-
-# # ---------- Step 2: Transcribe and Detect Language ----------
-# def transcribe_auto(audio_path, model_size="medium"):
-#     device = "cuda" if torch.cuda.is_available() else "cpu"
-
-#     model = whisperx.load_model(model_size, device=device,compute_type='float32')
-#     result = model.transcribe(audio_path)
-#     detected_lang = result['language']
-#     print(f"Detected language: {detected_lang}")
-
-#     # Optional: Word-level alignment
-#     model_a, metadata = whisperx.load_align_model(language_code=detected_lang, device=device)
-#     aligned_result = whisperx.align(result['segments'], model_a, metadata, audio_path, device=device)
-
-#     return aligned_result['segments'], detected_lang
-
-
-def transcribe_auto(audio_path, model_size="medium"):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    # Load WhisperX model
-    model = whisperx.load_model(model_size, device=device, compute_type='float32')
-
-    # Transcribe audio
+# -------------------- Step 2: Transcribe audio --------------------
+def transcribe_audio(audio_path, model_size="medium"):
+    """
+    Transcribe audio into text.
+    - Uses WhisperX for general languages
+    - Uses Punjabi or Bengali models if detected
+    """
+    model = whisperx.load_model(model_size, device=DEVICE, compute_type="float32")
     result = model.transcribe(audio_path)
-    detected_lang = result['language']
-    print(f"Detected language: {detected_lang}")
+    lang = result["language"]
+    print(f"🌍 Language detected: {lang}")
 
-	# Define languages that support alignment (you can expand this list)
-    supported_alignment_langs = {"en", "fr", "de", "es", "it", "pt", "nl"}  # etc.
-
-    if detected_lang == "pa":
+    # Special case: Punjabi
+    if lang == "pa":
         try:
+            print("🔤 Using Punjabi Wav2Vec2 model...")
             processor = Wav2Vec2Processor.from_pretrained("manandey/wav2vec2-large-xlsr-punjabi")
             wav2vec_model = Wav2Vec2ForCTC.from_pretrained("manandey/wav2vec2-large-xlsr-punjabi")
-            speech_array, sampling_rate = torchaudio.load(audio_path)
-            if sampling_rate != 16000:
-                resampler = torchaudio.transforms.Resample(orig_freq=sampling_rate, new_freq=16000)
-                speech_array = resampler(speech_array)
-            speech = speech_array.squeeze().numpy()
-            inputs = processor(speech, sampling_rate=16000, return_tensors="pt", padding=True)
+
+            speech_array, sr = torchaudio.load(audio_path)
+            if sr != 16000:  # resample if needed
+                speech_array = torchaudio.transforms.Resample(sr, 16000)(speech_array)
+
+            inputs = processor(speech_array.squeeze().numpy(),
+                               sampling_rate=16000,
+                               return_tensors="pt",
+                               padding=True)
             with torch.no_grad():
                 logits = wav2vec_model(inputs.input_values, attention_mask=inputs.attention_mask).logits
+
             predicted_ids = torch.argmax(logits, dim=-1)
             transcription = processor.batch_decode(predicted_ids)[0]
-            # out_path = os.path.join(output_folder, base_name + "_punjabi.txt")
-            # with open(out_path, "w", encoding="utf-8") as f:
-            #     f.write(transcription)
-            # print(f"[{base_name}] Punjabi transcription saved to: {out_path}")
-            print(type(transcription))
-            return transcription,detected_lang
+
+            return transcription, lang
         except Exception as e:
-            # print(f"[{base_name}] Punjabi transcription failed: {e}")
-            return None,detected_lang
-    elif detected_lang == "bn":
+            print("❌ Punjabi transcription failed:", e)
+            return None, lang
+
+    # Special case: Bengali
+    if lang == "bn":
         try:
             from banglaspeech2text import Speech2Text
+            print("🔤 Using Bengali speech-to-text model...")
             stt = Speech2Text("base")
             transcription = stt.recognize(audio_path)
-            print(type(transcription))
-            # out_path = os.path.join(output_folder, base_name + "_bengali.txt")
-            # with open(out_path, "w", encoding="utf-8") as f:
-            #     f.write(transcription)
-            # print(f"[{base_name}] Bengali transcription saved to: {out_path}")
-            # print("Preview:")
-            # print(transcription)
-            return transcription,detected_lang
+            return transcription, lang
         except Exception as e:
-            # print(f"[{base_name}] Bengali transcription failed: {e}")
-            return None,detected_lang
+            print("❌ Bengali transcription failed:", e)
+            return None, lang
 
-    # Perform alignment only if language is supported
-    elif detected_lang in supported_alignment_langs:
-        model_a, metadata = whisperx.load_align_model(language_code=detected_lang, device=device)
-        aligned_result = whisperx.align(result['segments'], model_a, metadata, audio_path, device=device)
-        return aligned_result['segments'], detected_lang
-    else:
-        print(f"Alignment not supported for language: {detected_lang}. Returning segment-level transcription only.")
-        return result['segments'], detected_lang
+    # For other languages (English, etc.)
+    try:
+        align_langs = {"en", "fr", "de", "es", "it", "pt", "nl"}
+        if lang in align_langs:
+            model_a, meta = whisperx.load_align_model(language_code=lang, device=DEVICE)
+            aligned_result = whisperx.align(result["segments"], model_a, meta, audio_path, device=DEVICE)
+            return aligned_result["segments"], lang
+        else:
+            # if word-level alignment is not supported
+            return result["segments"], lang
+    except:
+        return result["segments"], lang
 
-# ---------- Step 3: Save Transcript ----------
-def save_transcript(segments, output_path):
-    with open(output_path, "w", encoding="utf-8") as f:
+
+# -------------------- Step 3: Save transcript --------------------
+def save_transcript(segments, out_path):
+    """
+    Save transcript to a text file.
+    Supports both raw strings and a list of segments.
+    """
+    with open(out_path, "w", encoding="utf-8") as f:
         if isinstance(segments, str):
             f.write(segments + "\n")
         else:
             for seg in segments:
-                f.write(seg['text'] + "\n")
+                f.write(seg["text"] + "\n")
+    print(f"📄 Transcript saved: {out_path}")
 
-# ---------- Step 4: Process Multiple Videos ----------
+
+# -------------------- Step 4: Run on multiple videos --------------------
 def process_videos(video_folder, output_folder, model_size="medium"):
     os.makedirs(output_folder, exist_ok=True)
 
     for file_name in os.listdir(video_folder):
-        if file_name.lower().endswith(('.mp4', '.mkv', '.avi', '.mov')):
+        if file_name.lower().endswith((".mp4", ".mkv", ".avi", ".mov")):
+            print(f"\n▶️ Processing {file_name} ...")
+
+            # paths
             video_path = os.path.join(video_folder, file_name)
-            audio_path = os.path.join(output_folder, file_name.rsplit('.', 1)[0] + "_audio.wav")
-            print(audio_path)
-            print(f"\nProcessing: {file_name}")
-            t1 = time.time()
-            extract_audio(video_path, audio_path)
-            t2 = time.time()
-            segments, lang = transcribe_auto(audio_path, model_size)
-            t3 = time.time()
-            transcript_file = os.path.join(output_folder, f"{file_name.rsplit('.', 1)[0]}_transcript_{lang}.txt")
-            save_transcript(segments, transcript_file)
-            t4 = time.time()
-            print(f"Transcript saved for {file_name} in detected language: {lang}\n")
-            print(f"Time taken: {t2-t1:.2f}s to extract audio, {t3-t2:.2f}s to transcribe, {t4-t3:.2f}s to save transcript.")
+            audio_path = os.path.join(output_folder, file_name.rsplit(".", 1)[0] + "_audio.wav")
+            transcript_path = os.path.join(output_folder, file_name.rsplit(".", 1) + "_transcript.txt")
+
+            start = time.time()
+
+            # Step 1: Extract audio
+            if extract_audio(video_path, audio_path) is None:
+                continue  # skip if audio extraction fails
+
+            # Step 2: Transcribe
+            segments, lang = transcribe_audio(audio_path, model_size)
+
+            # Step 3: Save transcript
+            transcript_path = transcript_path.replace(".txt", f"_{lang}.txt")
+            save_transcript(segments, transcript_path)
+
+            end = time.time()
+            print(f"✅ Done in {end - start:.2f} seconds")
 
 
-# ---------- Main ----------
+# -------------------- Main --------------------
 if __name__ == "__main__":
-    # Folder with Indian language videos
+    # Define folders
     video_folder = "/content/drive/MyDrive/CDAC Project/videos"
     output_folder = "/content/transcripts"
 
+    # Run transcription
     process_videos(video_folder, output_folder, model_size="medium")
