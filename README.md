@@ -11,7 +11,8 @@ This project is used by the following companies:
 
 ## Flow Chart
 
-Untitled Diagram.png
+https://github.com/Ramanmalviya/Auto-Detection-of-language-from-Video-and-Transcription-of-Data/blob/main/Untitled%20Diagram.png
+
 ## Features
 
 This entire transcription pipeline runs completely offline on your local machine (or server) after initial setup. All audio extraction, language detection, and speech recognition—including Punjabi and Bengali transcription—are performed locally using pre-trained models without requiring any internet connection during processing. This ensures data privacy and fast, reliable operation without dependence on external APIs or cloud services.
